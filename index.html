@@ -1,0 +1,869 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Etsy Inventory & Profit Tracker</title>
+
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getDatabase, ref, push, set, remove, onValue } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+  import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+
+  // ── PASTE YOUR FIREBASE CONFIG HERE ──────────────────────────────────────
+  const firebaseConfig = {
+    apiKey:            "YOUR_API_KEY",
+    authDomain:        "YOUR_PROJECT_ID.firebaseapp.com",
+    databaseURL:       "https://YOUR_PROJECT_ID-default-rtdb.firebaseio.com",
+    projectId:         "YOUR_PROJECT_ID",
+    storageBucket:     "YOUR_PROJECT_ID.appspot.com",
+    messagingSenderId: "YOUR_SENDER_ID",
+    appId:             "YOUR_APP_ID"
+  };
+  // ─────────────────────────────────────────────────────────────────────────
+
+  const ALLOWED_EMAIL = 'YOUR_EMAIL@gmail.com';
+  const app      = initializeApp(firebaseConfig);
+  const db       = getDatabase(app);
+  const auth     = getAuth(app);
+  const provider = new GoogleAuthProvider();
+
+  window._fbPush   = (path, val) => push(ref(db, path), val);
+  window._fbSet    = (path, val) => set(ref(db, path), val);
+  window._fbRemove = (path)      => remove(ref(db, path));
+  window._fbListen = (path, cb)  => onValue(ref(db, path), snap => cb(snap.val()));
+  window._fbSignIn  = () => signInWithPopup(auth, provider).catch(() => alert('Sign-in failed. Please try again.'));
+  window._fbSignOut = () => signOut(auth);
+
+  onAuthStateChanged(auth, user => {
+    if (user && user.email === ALLOWED_EMAIL) {
+      document.getElementById('login-screen').style.display = 'none';
+      document.getElementById('app').style.display = 'block';
+      document.getElementById('auth-name').textContent = user.displayName || user.email;
+      if (user.photoURL) { const av=document.getElementById('auth-avatar'); av.src=user.photoURL; av.style.display='inline-block'; }
+      window._fbReady = true;
+      window._fbListen('inventory', data => {
+        window._invRecords = data
+          ? Object.entries(data).map(([k,v])=>({_fbKey:k,...v})).sort((a,b)=>(b._savedAt||'').localeCompare(a._savedAt||''))
+          : [];
+        if (typeof renderSavedList === 'function') renderSavedList();
+        if (typeof renderSummaryCards === 'function') renderSummaryCards();
+      });
+    } else if (user) {
+      signOut(auth);
+      alert('Access denied.');
+    } else {
+      document.getElementById('login-screen').style.display = 'flex';
+      document.getElementById('app').style.display = 'none';
+    }
+  }, () => {
+    document.getElementById('login-screen').style.display = 'flex';
+    document.getElementById('app').style.display = 'none';
+  });
+</script>
+
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=Source+Sans+3:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --navy:    #173e58;
+    --coral:   #df4540;
+    --amber:   #eca43b;
+    --orange:  #e0631d;
+    --green:   #476d29;
+    --red:     #c42b1f;
+    --black:   #000000;
+    --cream:   #f0eee9;
+    --tan:     #e8e5de;
+    --charcoal:#000000;
+    --muted:   #5a5550;
+    --border:  #ccc8be;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Source Sans 3', sans-serif; background: #f0eee9; color: var(--charcoal); font-size: 15px; line-height: 1.6; }
+
+  /* ── HEADER ─────────────────────────────── */
+  header { background: var(--navy); }
+  .header-stripe { height: 4px; background: linear-gradient(90deg, var(--coral) 0%, var(--amber) 38%, var(--orange) 65%, var(--navy) 100%); }
+  .header-body { padding: 1.75rem 1.5rem 1.5rem; display: flex; align-items: flex-end; justify-content: space-between; gap: 1rem; }
+  .hb-eyebrow { display: flex; align-items: center; gap: 0.45rem; margin-bottom: 0.35rem; }
+  .hb-dot { width: 7px; height: 7px; background: var(--coral); border-radius: 50%; }
+  .hb-label { font-size: 0.7rem; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; color: rgba(255,255,255,0.4); }
+  .hb-title { font-family: 'Playfair Display', serif; font-size: 1.65rem; font-weight: 700; color: #fff; line-height: 1.15; }
+  .hb-title em { color: var(--amber); font-style: normal; }
+  .hb-right { text-align: right; }
+  .hb-right p { font-size: 0.72rem; color: rgba(255,255,255,0.38); text-transform: uppercase; letter-spacing: 0.06em; }
+  .hb-date { font-size: 0.82rem; color: rgba(255,255,255,0.58); margin-top: 0.22rem; }
+
+  /* ── FIRM STRIP ──────────────────────────── */
+  .firm-strip { border-top: 1px solid rgba(255,255,255,0.1); }
+  .firm-inner { padding: 0.55rem 1.5rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+  .firm-left { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+  .firm-name { font-size: 0.76rem; font-weight: 700; color: rgba(255,255,255,0.85); letter-spacing: 0.02em; }
+  .firm-sep { color: var(--amber); font-size: 0.65rem; }
+  .firm-desc { font-size: 0.73rem; color: rgba(255,255,255,0.55); }
+  .firm-right { display: flex; align-items: center; gap: 0.75rem; }
+  #auth-avatar { width: 26px; height: 26px; border-radius: 50%; border: 1.5px solid rgba(255,255,255,0.25); object-fit: cover; display: none; }
+  #auth-name { font-size: 0.72rem; color: rgba(255,255,255,0.5); }
+
+  /* ── SUMMARY STRIP ───────────────────────── */
+  .summary-strip { background: var(--navy); border-top: 1px solid rgba(255,255,255,0.06); padding: 0.75rem 1.5rem; }
+  .summary-cards { display: grid; grid-template-columns: repeat(5,1fr); gap: 0.6rem; }
+  .sum-card { background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.1); border-radius: 7px; padding: 0.6rem 0.85rem; text-align: center; }
+  .sum-lbl { font-size: 0.62rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: rgba(255,255,255,0.4); display: block; margin-bottom: 0.2rem; }
+  .sum-val { font-family: 'Playfair Display', serif; font-size: 1.1rem; font-weight: 700; color: #fff; display: block; }
+  .sum-card.c-green .sum-val { color: #8ec66a; }
+  .sum-card.c-coral  .sum-val { color: #f4857f; }
+  .sum-card.c-amber  .sum-val { color: var(--amber); }
+
+  /* ── TAB BAR ─────────────────────────────── */
+  .tab-strip { background: var(--navy); border-top: 1px solid rgba(255,255,255,0.06); padding: 0 1.5rem; display: flex; }
+  .tab-btn { padding: 0.6rem 1.25rem; font-family: 'Source Sans 3', sans-serif; font-size: 0.78rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: rgba(255,255,255,0.4); background: transparent; border: none; border-bottom: 2px solid transparent; cursor: pointer; transition: all 0.18s; }
+  .tab-btn:hover { color: rgba(255,255,255,0.75); }
+  .tab-btn.active { color: var(--amber); border-bottom-color: var(--amber); }
+
+  /* ── LAYOUT ──────────────────────────────── */
+  .page-wrap { max-width: 920px; margin: 0 auto; box-shadow: 0 0 40px rgba(0,0,0,0.08); background: var(--cream); min-height: 100vh; }
+  main { padding: 1.75rem 1.5rem 3.5rem; }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  /* ── SECTION ─────────────────────────────── */
+  .section { margin-bottom: 1.5rem; }
+  .sec-head { display: flex; align-items: center; gap: 0.7rem; padding-bottom: 0.4rem; border-bottom: 2px solid var(--amber); margin-bottom: 0.7rem; }
+  .sec-num { font-family: 'Playfair Display', serif; font-size: 1.125rem; font-weight: 700; color: var(--coral); min-width: 1.5rem; }
+  .sec-title { font-family: 'Playfair Display', serif; font-size: 1.125rem; font-weight: 700; color: var(--navy); }
+  .sec-note { margin-left: auto; font-size: 0.76rem; color: var(--muted); font-style: italic; }
+
+  /* ── CARD ────────────────────────────────── */
+  .card { background: var(--tan); border: 1px solid var(--border); border-radius: 8px; padding: 0.9rem 1.2rem; margin-bottom: 0.5rem; }
+  .card:last-child { margin-bottom: 0; }
+  .q-label { font-weight: 600; font-size: 0.88rem; color: var(--navy); margin-bottom: 0.7rem; display: flex; align-items: flex-start; gap: 0.4rem; }
+  .q-label::before { content: '▸'; color: var(--coral); font-size: 0.72rem; margin-top: 0.18rem; flex-shrink: 0; }
+
+  /* ── FORM ────────────────────────────────── */
+  .fl { display: block; font-size: 0.73rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 0.38rem; }
+  input[type=text], input[type=number], input[type=date], textarea, select {
+    width: 100%; background: #fff; border: 1px solid var(--border); border-radius: 5px;
+    color: var(--charcoal); font-family: 'Source Sans 3', sans-serif; font-size: 0.9rem;
+    padding: 0.52rem 0.8rem; outline: none; transition: border-color 0.18s, box-shadow 0.18s;
+  }
+  textarea { resize: vertical; min-height: 2.8rem; }
+  input:focus, textarea:focus, select:focus { border-color: var(--navy); box-shadow: 0 0 0 3px rgba(23,62,88,0.10); }
+  input[readonly] { background: #f8f6f2 !important; cursor: default; color: var(--muted); }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.9rem; margin-top: 0.85rem; }
+  .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.9rem; margin-top: 0.85rem; }
+  .row4 { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 0.9rem; margin-top: 0.85rem; }
+  .fg { display: flex; flex-direction: column; }
+
+  /* ── FIN CELLS ───────────────────────────── */
+  .fin-row { display: grid; grid-template-columns: repeat(3,1fr); gap: 0.7rem; margin-top: 0.9rem; }
+  .fin-cell { background: #fff; border: 1px solid var(--border); border-top: 3px solid var(--amber); border-radius: 6px; padding: 0.7rem 0.85rem; }
+  .fin-cell.t-green { border-top-color: var(--green); }
+  .fin-cell.t-coral { border-top-color: var(--coral); }
+  .fin-cell.t-orange { border-top-color: var(--orange); }
+  .fin-value { font-family: 'Playfair Display', serif; font-size: 1.2rem; font-weight: 700; color: var(--navy); margin-top: 0.2rem; }
+  .fin-value.pos { color: var(--green); }
+  .fin-value.neg { color: var(--red); }
+  .fin-value.warn { color: var(--orange); }
+  .fin-hint { font-size: 0.7rem; color: var(--muted); margin-top: 0.2rem; }
+
+  /* ── PROFIT SUMMARY ──────────────────────── */
+  .profit-summary { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 0.5rem; }
+  .profit-card { background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 1rem 1.2rem; text-align: center; }
+  .profit-card.t-green { border-top: 3px solid var(--green); }
+  .profit-card.t-coral  { border-top: 3px solid var(--coral); }
+  .pc-label { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); display: block; margin-bottom: 0.3rem; }
+  .pc-value { font-family: 'Playfair Display', serif; font-size: 2rem; font-weight: 700; display: block; }
+  .pc-formula { font-size: 0.72rem; color: var(--muted); margin-top: 0.3rem; }
+
+  /* ── BUTTONS ─────────────────────────────── */
+  .act-row { display: flex; justify-content: flex-end; gap: 0.65rem; margin-top: 2rem; flex-wrap: wrap; }
+  .btn { padding: 0.57rem 1.45rem; border-radius: 5px; font-family: 'Source Sans 3', sans-serif; font-size: 0.87rem; font-weight: 600; cursor: pointer; border: none; transition: all 0.18s; }
+  .btn-ghost { background: transparent; border: 1.5px solid var(--border); color: var(--muted); }
+  .btn-ghost:hover { border-color: var(--charcoal); color: var(--charcoal); }
+  .btn-outline { background: transparent; border: 1.5px solid var(--navy); color: var(--navy); }
+  .btn-outline:hover { background: var(--navy); color: #fff; }
+  .btn-primary { background: var(--green); color: #fff; font-weight: 700; box-shadow: 0 3px 12px rgba(71,109,41,0.25); }
+  .btn-primary:hover { background: #385820; transform: translateY(-1px); box-shadow: 0 5px 18px rgba(71,109,41,0.35); }
+
+  /* ── SAVED PANEL ─────────────────────────── */
+  #savedPanel { background: var(--tan); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 1.6rem; overflow: hidden; }
+  .saved-hd { background: var(--navy); padding: 0.75rem 1.25rem; display: flex; align-items: center; justify-content: space-between; }
+  .saved-hd-title { font-family: 'Playfair Display', serif; font-size: 0.88rem; color: #fff; }
+  .saved-hd-count { font-size: 0.72rem; color: rgba(255,255,255,0.45); }
+  #savedList { padding: 0.5rem 0.75rem; display: flex; flex-direction: column; gap: 0.35rem; max-height: 260px; overflow-y: auto; }
+  .saved-empty { font-size: 0.82rem; color: var(--muted); font-style: italic; padding: 0.5rem 0; }
+  .saved-item { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; background: #fff; border: 1px solid var(--border); border-radius: 6px; padding: 0.55rem 0.85rem; cursor: pointer; transition: border-color 0.16s, box-shadow 0.16s; }
+  .saved-item:hover { border-color: var(--amber); box-shadow: 0 2px 8px rgba(236,164,59,0.14); }
+  .saved-item-info { flex: 1; min-width: 0; }
+  .saved-item-name { font-size: 0.85rem; font-weight: 600; color: var(--charcoal); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .saved-item-meta { font-size: 0.72rem; color: var(--muted); margin-top: 0.1rem; }
+  .saved-item-profit { font-size: 0.8rem; font-weight: 700; white-space: nowrap; flex-shrink: 0; }
+  .saved-item-del { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 1rem; line-height: 1; padding: 0.2rem 0.35rem; border-radius: 4px; flex-shrink: 0; transition: color 0.15s, background 0.15s; }
+  .saved-item-del:hover { color: var(--coral); background: #fce8e8; }
+
+  /* ── TABLE ───────────────────────────────── */
+  .search-row { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1rem; flex-wrap: wrap; }
+  .search-input { flex: 1; min-width: 200px; padding: 0.52rem 0.8rem; border: 1px solid var(--border); border-radius: 5px; font-family: 'Source Sans 3', sans-serif; font-size: 0.9rem; background: #fff; color: var(--charcoal); outline: none; transition: border-color 0.18s; }
+  .search-input:focus { border-color: var(--navy); box-shadow: 0 0 0 3px rgba(23,62,88,0.10); }
+  .rec-count { font-size: 0.78rem; color: var(--muted); white-space: nowrap; }
+  .table-wrap { overflow-x: auto; border-radius: 8px; border: 1px solid var(--border); }
+  table.inv-t { width: 100%; border-collapse: collapse; font-size: 0.84rem; }
+  table.inv-t thead { background: var(--navy); }
+  table.inv-t th { padding: 0.65rem 0.9rem; text-align: left; font-size: 0.65rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: rgba(255,255,255,0.6); white-space: nowrap; }
+  table.inv-t td { padding: 0.65rem 0.9rem; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  table.inv-t tbody tr:last-child td { border-bottom: none; }
+  table.inv-t tbody tr:hover { background: #f7f4ef; }
+  .td-name { font-weight: 600; color: var(--navy); }
+  .td-sub { font-size: 0.72rem; color: var(--muted); margin-top: 2px; }
+  .badge { display: inline-block; padding: 0.14rem 0.55rem; border-radius: 10px; font-size: 0.7rem; font-weight: 700; }
+  .badge-good { background: #e8f0de; color: var(--green); }
+  .badge-ok   { background: #fdf2db; color: #8a6510; }
+  .badge-bad  { background: #fce8e8; color: var(--red); }
+  .t-pos { color: var(--green); font-weight: 700; }
+  .t-neg { color: var(--red);   font-weight: 700; }
+  .btn-t { padding: 0.28rem 0.75rem; border-radius: 5px; font-size: 0.74rem; font-weight: 600; cursor: pointer; border: none; transition: all 0.15s; margin-left: 4px; }
+  .btn-t-view { background: #dbeafe; color: #1d4ed8; }
+  .btn-t-view:hover { background: #bfdbfe; }
+  .btn-t-del { background: #fce8e8; color: var(--red); }
+  .btn-t-del:hover { background: #fecaca; }
+  .empty-td { text-align: center; padding: 3rem !important; color: var(--muted); font-style: italic; }
+
+  /* ── MODAL ───────────────────────────────── */
+  .modal-overlay { position: fixed; inset: 0; background: rgba(23,62,88,0.5); display: flex; align-items: center; justify-content: center; z-index: 500; padding: 1rem; }
+  .modal-overlay.hidden { display: none; }
+  .modal { background: var(--cream); border-radius: 12px; max-width: 680px; width: 100%; max-height: 88vh; overflow-y: auto; box-shadow: 0 20px 60px rgba(0,0,0,0.25); }
+  .modal-hd { background: var(--navy); border-radius: 12px 12px 0 0; padding: 1.1rem 1.4rem; display: flex; align-items: center; justify-content: space-between; }
+  .modal-hd-title { font-family: 'Playfair Display', serif; font-size: 1.1rem; font-weight: 700; color: #fff; }
+  .modal-close { background: rgba(255,255,255,0.15); border: none; color: #fff; font-size: 1rem; width: 28px; height: 28px; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background 0.15s; }
+  .modal-close:hover { background: rgba(255,255,255,0.28); }
+  .modal-body { padding: 1.4rem; }
+  .modal-sec-title { font-size: 0.65rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: var(--coral); margin-bottom: 0.55rem; margin-top: 1rem; }
+  .modal-sec-title:first-child { margin-top: 0; }
+  .modal-row { display: flex; justify-content: space-between; align-items: center; padding: 0.32rem 0; border-bottom: 1px dashed var(--border); font-size: 0.86rem; }
+  .modal-row:last-child { border-bottom: none; }
+  .modal-row-lbl { color: var(--muted); }
+  .modal-row-val { font-weight: 600; }
+  .modal-total { display: flex; justify-content: space-between; align-items: center; padding: 0.6rem 0.85rem; background: var(--tan); border-radius: 6px; margin-top: 0.5rem; }
+  .modal-total-lbl { font-weight: 700; font-size: 0.88rem; }
+  .modal-total-val { font-family: 'Playfair Display', serif; font-size: 1.1rem; font-weight: 700; }
+  .modal-profit-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-top: 1rem; }
+  .modal-profit-card { background: var(--tan); border-radius: 8px; padding: 0.85rem; text-align: center; border: 1px solid var(--border); }
+
+  /* ── FORM MSG ────────────────────────────── */
+  .form-msg { margin-top: 0.75rem; padding: 0.65rem 1rem; border-radius: 6px; font-size: 0.88rem; font-weight: 500; display: none; }
+  .form-msg.success { background: #e8f0de; color: var(--green); display: block; }
+  .form-msg.error   { background: #fce8e8; color: var(--red);   display: block; }
+
+  /* ── FOOTER ──────────────────────────────── */
+  footer { background: var(--navy); text-align: center; font-size: 0.73rem; color: rgba(255,255,255,0.3); padding: 1.1rem; letter-spacing: 0.04em; margin-top: 3rem; }
+  footer span { color: var(--coral); }
+
+  /* ── RESPONSIVE ──────────────────────────── */
+  @media (max-width: 700px) {
+    .summary-cards { grid-template-columns: repeat(3,1fr); }
+    .row4 { grid-template-columns: 1fr 1fr; }
+    .fin-row, .profit-summary { grid-template-columns: 1fr; }
+    .hb-right { display: none; }
+  }
+  @media (max-width: 520px) {
+    .page-wrap { box-shadow: none; }
+    .header-body { flex-direction: column; align-items: flex-start; padding: 1.2rem 1rem 1rem; }
+    .firm-inner { flex-direction: column; align-items: flex-start; gap: 0.2rem; padding: 0.5rem 1rem; }
+    main { padding: 1.2rem 0.9rem 2.5rem; }
+    .row2, .row3, .row4, .fin-row { grid-template-columns: 1fr; }
+    .summary-cards { grid-template-columns: 1fr 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ══ LOGIN SCREEN ═══════════════════════════════════════════ -->
+<div id="login-screen" style="display:none;position:fixed;inset:0;background:#173e58;z-index:9999;flex-direction:column;align-items:center;justify-content:center;gap:24px;">
+  <div style="text-align:center;">
+    <div style="font-family:'Playfair Display',serif;font-size:32px;font-weight:700;color:#fff;">Etsy Profit Tracker<span style="color:#df4540">.</span></div>
+    <div style="font-size:11px;color:rgba(255,255,255,0.35);margin-top:4px;letter-spacing:0.12em;text-transform:uppercase;">Inventory &amp; Earnings Dashboard</div>
+  </div>
+  <div style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.12);border-radius:16px;padding:36px 44px;text-align:center;max-width:360px;width:90%;">
+    <div style="font-size:36px;margin-bottom:12px;">🏪</div>
+    <div style="font-family:'Playfair Display',serif;font-size:18px;font-weight:700;color:#fff;margin-bottom:8px;">Sign in to continue</div>
+    <div style="font-size:13px;color:rgba(255,255,255,0.45);margin-bottom:28px;line-height:1.6;">Your private inventory &amp; profit data</div>
+    <button onclick="window._fbSignIn()" style="background:#df4540;color:#fff;border:none;border-radius:8px;padding:13px 24px;font-family:'Source Sans 3',sans-serif;font-size:14px;font-weight:600;cursor:pointer;width:100%;">Sign in with Google</button>
+  </div>
+</div>
+
+<!-- ══ APP ════════════════════════════════════════════════════ -->
+<div id="app" style="display:none;">
+<div class="page-wrap">
+
+<header>
+  <div class="header-stripe"></div>
+  <div class="header-body">
+    <div class="hb-left">
+      <div class="hb-eyebrow"><span class="hb-dot"></span><span class="hb-label">E-Commerce Operations</span></div>
+      <h1 class="hb-title">Etsy <em>Inventory</em> &amp; Profit Tracker</h1>
+    </div>
+    <div class="hb-right">
+      <p>Earnings Dashboard</p>
+      <div class="hb-date" id="todayDate"></div>
+    </div>
+  </div>
+  <div class="firm-strip">
+    <div class="firm-inner">
+      <div class="firm-left">
+        <span class="firm-name">My Etsy Shop</span>
+        <span class="firm-sep">|</span>
+        <span class="firm-desc">Product Inventory &amp; Profit Tracker</span>
+      </div>
+      <div class="firm-right">
+        <img id="auth-avatar" src="" alt="" style="width:26px;height:26px;border-radius:50%;border:1.5px solid rgba(255,255,255,0.25);display:none;">
+        <span id="auth-name" style="font-size:0.72rem;color:rgba(255,255,255,0.5);"></span>
+        <button onclick="window._fbSignOut()" style="background:transparent;border:1px solid rgba(255,255,255,0.2);color:rgba(255,255,255,0.5);border-radius:4px;padding:0.2rem 0.6rem;font-size:0.7rem;cursor:pointer;font-family:'Source Sans 3',sans-serif;">Sign out</button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- Summary Strip -->
+<div class="summary-strip">
+  <div class="summary-cards">
+    <div class="sum-card">
+      <span class="sum-lbl">Products</span>
+      <span class="sum-val" id="sum-products">0</span>
+    </div>
+    <div class="sum-card c-green">
+      <span class="sum-lbl">Total Revenue</span>
+      <span class="sum-val" id="sum-revenue">$0.00</span>
+    </div>
+    <div class="sum-card c-coral">
+      <span class="sum-lbl">Fees + Costs</span>
+      <span class="sum-val" id="sum-costs">$0.00</span>
+    </div>
+    <div class="sum-card c-amber">
+      <span class="sum-lbl">Net Profit</span>
+      <span class="sum-val" id="sum-profit">$0.00</span>
+    </div>
+    <div class="sum-card">
+      <span class="sum-lbl">Avg Margin</span>
+      <span class="sum-val" id="sum-margin">0%</span>
+    </div>
+  </div>
+</div>
+
+<!-- Tab Bar -->
+<div class="tab-strip">
+  <button class="tab-btn active" data-tab="inventory">📦 Inventory</button>
+  <button class="tab-btn" data-tab="add">➕ Add Product</button>
+</div>
+
+<main>
+
+  <!-- ══ TAB: INVENTORY ══════════════════════ -->
+  <div class="tab-panel active" id="tab-inventory">
+
+    <div id="savedPanel">
+      <div class="saved-hd">
+        <span class="saved-hd-title">All Products</span>
+        <span class="saved-hd-count" id="savedCount">0 products</span>
+      </div>
+      <div id="savedList"><div class="saved-empty">No products yet. Add your first product to get started.</div></div>
+    </div>
+
+    <div class="section">
+      <div class="sec-head">
+        <span class="sec-num">▦</span>
+        <span class="sec-title">Inventory Overview</span>
+        <span class="sec-note">Click any row to edit</span>
+      </div>
+      <div class="search-row">
+        <input type="text" class="search-input" id="searchInput" placeholder="Search by name, SKU, or description…" oninput="filterTable()">
+        <span class="rec-count" id="recCount"></span>
+      </div>
+      <div class="table-wrap">
+        <table class="inv-t">
+          <thead>
+            <tr>
+              <th>Product / SKU</th>
+              <th>Item Price</th>
+              <th>Revenue</th>
+              <th>Etsy Fees</th>
+              <th>Total Costs</th>
+              <th>Net Profit</th>
+              <th>Margin</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="invTbody">
+            <tr><td colspan="8" class="empty-td">No products yet — add your first one!</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ══ TAB: ADD PRODUCT ════════════════════ -->
+  <div class="tab-panel" id="tab-add">
+
+    <!-- 01 Product Information -->
+    <div class="section">
+      <div class="sec-head">
+        <span class="sec-num">01</span>
+        <span class="sec-title">Product Information</span>
+        <span class="sec-note">Item details</span>
+      </div>
+      <div class="card">
+        <div class="fg">
+          <label class="fl" for="f-name">Product Name *</label>
+          <input type="text" id="f-name" placeholder="e.g. Handmade Ceramic Mug" oninput="liveCalc()">
+        </div>
+        <div class="row2">
+          <div class="fg">
+            <label class="fl" for="f-sku">SKU Number</label>
+            <input type="text" id="f-sku" placeholder="e.g. MUG-001" oninput="liveCalc()">
+          </div>
+          <div class="fg">
+            <label class="fl" for="f-category">Category</label>
+            <input type="text" id="f-category" placeholder="e.g. Ceramics, Jewelry, Prints…" oninput="liveCalc()">
+          </div>
+        </div>
+        <div class="fg" style="margin-top:0.85rem;">
+          <label class="fl" for="f-desc">Product Description</label>
+          <textarea id="f-desc" rows="2" placeholder="Brief description of the product…" oninput="liveCalc()"></textarea>
+        </div>
+      </div>
+    </div>
+
+    <!-- 02 Revenue -->
+    <div class="section">
+      <div class="sec-head">
+        <span class="sec-num">02</span>
+        <span class="sec-title">Revenue</span>
+        <span class="sec-note">What the customer pays</span>
+      </div>
+      <div class="card">
+        <div class="row3">
+          <div class="fg">
+            <label class="fl" for="f-price">Item Price ($) *</label>
+            <input type="number" id="f-price" step="0.01" min="0" placeholder="0.00" oninput="liveCalc()">
+          </div>
+          <div class="fg">
+            <label class="fl" for="f-shipping-rev">Shipping Price ($)</label>
+            <input type="number" id="f-shipping-rev" step="0.01" min="0" placeholder="0.00" oninput="liveCalc()">
+          </div>
+          <div class="fg">
+            <label class="fl" for="f-discount">Discount ($)</label>
+            <input type="number" id="f-discount" step="0.01" min="0" placeholder="0.00" oninput="liveCalc()">
+          </div>
+        </div>
+        <div class="fin-row" style="grid-template-columns:1fr;">
+          <div class="fin-cell t-green">
+            <label class="fl">Total Revenue</label>
+            <div class="fin-value pos" id="c-revenue">$0.00</div>
+            <div class="fin-hint">Price + Shipping − Discount</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 03 Etsy Fees -->
+    <div class="section">
+      <div class="sec-head">
+        <span class="sec-num">03</span>
+        <span class="sec-title">Etsy Fees</span>
+        <span class="sec-note">Pre-filled with 2025 official Etsy rates</span>
+      </div>
+      <div class="card">
+        <div class="q-label">Official Etsy fees are pre-filled below. Adjust only if your rates differ.</div>
+        <div class="row3">
+          <div class="fg">
+            <label class="fl" for="f-listing-fee">Listing Fee ($) <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;font-size:0.7rem;">$0.20 flat</span></label>
+            <input type="number" id="f-listing-fee" step="0.01" min="0" value="0.20" oninput="liveCalc()">
+          </div>
+          <div class="fg">
+            <label class="fl" for="f-txn-pct">Transaction Fee (%) <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;font-size:0.7rem;">6.5%</span></label>
+            <input type="number" id="f-txn-pct" step="0.1" min="0" value="6.5" oninput="liveCalc()">
+          </div>
+          <div class="fg">
+            <label class="fl" for="f-payment-pct">Payment Processing (%) <span style="font-weight:400;font-style:italic;text-transform:none;letter-spacing:0;font-size:0.7rem;">3%+$0.25</span></label>
+            <input type="number" id="f-payment-pct" step="0.1" min="0" value="3" oninput="liveCalc()">
+          </div>
+          <div class="fg">
+            <label class="fl" for="f-payment-flat">Payment Flat Fee ($)</label>
+            <input type="number" id="f-payment-flat" step="0.01" min="0" value="0.25" oninput="liveCalc()">
+          </div>
+          <div class="fg">
+            <label class="fl" for="f-ads">Etsy Ads Spend ($)</label>
+            <input type="number" id="f-ads" step="0.01" min="0" placeholder="0.00" oninput="liveCalc()">
+          </div>
+          <div class="fg">
+            <label class="fl" for="f-offsite-select">Offsite Ads Fee</label>
+            <select id="f-offsite-select" onchange="handleOffsite()">
+              <option value="0">No Offsite Ad</option>
+              <option value="15">15% — Under $10k/yr (optional)</option>
+              <option value="12">12% — Over $10k/yr (mandatory)</option>
+              <option value="custom">Custom %</option>
+            </select>
+            <input type="number" id="f-offsite-pct" step="0.1" min="0" value="0" placeholder="%" style="margin-top:0.4rem;display:none;" oninput="liveCalc()">
+          </div>
+        </div>
+        <div class="fin-row" style="grid-template-columns:1fr;">
+          <div class="fin-cell t-coral">
+            <label class="fl">Total Etsy Fees</label>
+            <div class="fin-value neg" id="c-fees">$0.00</div>
+            <div class="fin-hint">Listing + Transaction + Processing + Ads + Offsite</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 04 Product Costs -->
+    <div class="section">
+      <div class="sec-head">
+        <span class="sec-num">04</span>
+        <span class="sec-title">Product Costs</span>
+        <span class="sec-note">All costs to make &amp; ship this item</span>
+      </div>
+      <div class="card">
+        <div class="row4">
+          <div class="fg">
+            <label class="fl" for="f-item-cost">Item Cost ($)</label>
+            <input type="number" id="f-item-cost" step="0.01" min="0" placeholder="0.00" oninput="liveCalc()">
+          </div>
+          <div class="fg">
+            <label class="fl" for="f-material">Material Cost ($)</label>
+            <input type="number" id="f-material" step="0.01" min="0" placeholder="0.00" oninput="liveCalc()">
+          </div>
+          <div class="fg">
+            <label class="fl" for="f-supplies">Other Supplies ($)</label>
+            <input type="number" id="f-supplies" step="0.01" min="0" placeholder="0.00" oninput="liveCalc()">
+          </div>
+          <div class="fg">
+            <label class="fl" for="f-labor">Labor ($)</label>
+            <input type="number" id="f-labor" step="0.01" min="0" placeholder="0.00" oninput="liveCalc()">
+          </div>
+          <div class="fg">
+            <label class="fl" for="f-packaging">Packaging ($)</label>
+            <input type="number" id="f-packaging" step="0.01" min="0" placeholder="0.00" oninput="liveCalc()">
+          </div>
+          <div class="fg">
+            <label class="fl" for="f-shipping-cost">Shipping Cost ($)</label>
+            <input type="number" id="f-shipping-cost" step="0.01" min="0" placeholder="0.00" oninput="liveCalc()">
+          </div>
+          <div class="fg">
+            <label class="fl" for="f-tax">Tax ($)</label>
+            <input type="number" id="f-tax" step="0.01" min="0" placeholder="0.00" oninput="liveCalc()">
+          </div>
+        </div>
+        <div class="fin-row" style="grid-template-columns:1fr;">
+          <div class="fin-cell t-orange">
+            <label class="fl">Total Product Costs</label>
+            <div class="fin-value warn" id="c-costs">$0.00</div>
+            <div class="fin-hint">Sum of all costs above</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 05 Profit Summary -->
+    <div class="section">
+      <div class="sec-head">
+        <span class="sec-num">05</span>
+        <span class="sec-title">Profit Summary</span>
+      </div>
+      <div class="card" style="background:linear-gradient(135deg,#eef4e7 0%,#f5ede0 100%);">
+        <div class="profit-summary">
+          <div class="profit-card t-green">
+            <span class="pc-label">Net Profit</span>
+            <span class="pc-value" id="c-profit" style="color:var(--green);">$0.00</span>
+            <div class="pc-formula">Revenue − Etsy Fees − Product Costs</div>
+          </div>
+          <div class="profit-card t-coral">
+            <span class="pc-label">Profit Margin</span>
+            <span class="pc-value" id="c-margin" style="color:var(--green);">0.0%</span>
+            <div class="pc-formula">Net Profit ÷ Revenue × 100</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="act-row">
+      <button class="btn btn-ghost" onclick="clearForm()">↺ Clear Form</button>
+      <button class="btn btn-primary" id="saveBtn" onclick="saveRecord()">✦ Save Product</button>
+    </div>
+    <div class="form-msg" id="formMsg"></div>
+
+  </div><!-- /tab-add -->
+
+</main>
+
+<footer><span>●</span> Etsy Inventory &amp; Profit Tracker &nbsp;·&nbsp; E-Commerce Operations Tool</footer>
+</div><!-- /page-wrap -->
+
+<!-- ══ DETAIL MODAL ══════════════════════════════════════════ -->
+<div class="modal-overlay hidden" id="detailModal">
+  <div class="modal">
+    <div class="modal-hd">
+      <span class="modal-hd-title" id="modalTitle">Product Detail</span>
+      <button class="modal-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body" id="modalBody"></div>
+  </div>
+</div>
+
+</div><!-- /app -->
+
+<script>
+document.getElementById('todayDate').textContent =
+  new Date().toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
+
+// ── TABS ──────────────────────────────────────────────────────
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('tab-'+btn.dataset.tab).classList.add('active');
+  });
+});
+
+// ── CALCULATIONS ──────────────────────────────────────────────
+function nv(id){ return parseFloat(document.getElementById(id)?.value)||0; }
+
+function calcRev(d){ return Math.max(0,(d.price||0)+(d.shippingRev||0)-(d.discount||0)); }
+function calcFees(d){
+  const base=(d.price||0)+(d.shippingRev||0);
+  const listing=d.listingFee||0;
+  const txn=base*((d.txnPct||0)/100);
+  const pay=base*((d.paymentPct||0)/100)+(d.paymentFlat||0);
+  const ads=d.adsFee||0;
+  const off=base*((d.offsitePct||0)/100);
+  return {listing,txn,pay,ads,off,total:listing+txn+pay+ads+off};
+}
+function calcCosts(d){ return (d.itemCost||0)+(d.material||0)+(d.supplies||0)+(d.labor||0)+(d.packaging||0)+(d.shippingCost||0)+(d.tax||0); }
+function calcProfit(d){ return calcRev(d)-calcFees(d).total-calcCosts(d); }
+function calcMargin(d){ const r=calcRev(d); return r?(calcProfit(d)/r*100):0; }
+function fmt(v){ return (v<0?'-$':'$')+Math.abs(v).toFixed(2); }
+
+function getForm(){
+  return {
+    name:document.getElementById('f-name').value.trim(),
+    sku:document.getElementById('f-sku').value.trim(),
+    category:document.getElementById('f-category').value.trim(),
+    desc:document.getElementById('f-desc').value.trim(),
+    price:nv('f-price'), shippingRev:nv('f-shipping-rev'), discount:nv('f-discount'),
+    listingFee:nv('f-listing-fee'), txnPct:nv('f-txn-pct'),
+    paymentPct:nv('f-payment-pct'), paymentFlat:nv('f-payment-flat'),
+    adsFee:nv('f-ads'), offsitePct:nv('f-offsite-pct'),
+    itemCost:nv('f-item-cost'), material:nv('f-material'), supplies:nv('f-supplies'),
+    labor:nv('f-labor'), packaging:nv('f-packaging'), shippingCost:nv('f-shipping-cost'), tax:nv('f-tax'),
+  };
+}
+
+// ── LIVE CALC ─────────────────────────────────────────────────
+function liveCalc(){
+  const d=getForm(), rev=calcRev(d), fees=calcFees(d).total, costs=calcCosts(d);
+  const profit=rev-fees-costs, margin=rev?(profit/rev*100):0;
+  document.getElementById('c-revenue').textContent='$'+rev.toFixed(2);
+  document.getElementById('c-fees').textContent='$'+fees.toFixed(2);
+  document.getElementById('c-costs').textContent='$'+costs.toFixed(2);
+  const pEl=document.getElementById('c-profit');
+  pEl.textContent=fmt(profit); pEl.style.color=profit>=0?'var(--green)':'var(--red)';
+  const mEl=document.getElementById('c-margin');
+  mEl.textContent=margin.toFixed(1)+'%'; mEl.style.color=margin>=30?'var(--green)':margin>=0?'var(--orange)':'var(--red)';
+}
+
+function handleOffsite(){
+  const sel=document.getElementById('f-offsite-select'), inp=document.getElementById('f-offsite-pct');
+  if(sel.value==='custom'){ inp.style.display='block'; inp.value=''; }
+  else { inp.style.display='none'; inp.value=sel.value; }
+  liveCalc();
+}
+
+// ── SAVE ──────────────────────────────────────────────────────
+function saveRecord(){
+  if(!window._fbPush){ showMsg('error','Not connected. Please sign in.'); return; }
+  const d=getForm();
+  if(!d.name){ showMsg('error','Product name is required.'); return; }
+  if(!d.price){ showMsg('error','Item price is required.'); return; }
+  d._savedAt=new Date().toISOString();
+  const key=(d.name+'|'+d.sku).toLowerCase();
+  const existing=(window._invRecords||[]).find(r=>((r.name+'|'+r.sku).toLowerCase())===key);
+  const save=existing?window._fbSet(`inventory/${existing._fbKey}`,d):window._fbPush('inventory',d);
+  const btn=document.getElementById('saveBtn');
+  btn.disabled=true; btn.textContent='Saving…';
+  save.then(()=>{
+    showMsg('success',`"${d.name}" saved!`); clearForm();
+    document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));
+    document.querySelector('[data-tab="inventory"]').classList.add('active');
+    document.getElementById('tab-inventory').classList.add('active');
+  }).catch(e=>showMsg('error','Save failed: '+e.message))
+    .finally(()=>{ btn.disabled=false; btn.textContent='✦ Save Product'; });
+}
+
+function showMsg(type,text){
+  const el=document.getElementById('formMsg');
+  el.textContent=text; el.className='form-msg '+type;
+  setTimeout(()=>{ el.className='form-msg'; },4000);
+}
+
+function clearForm(){
+  ['f-name','f-sku','f-category','f-desc','f-price','f-shipping-rev','f-discount',
+   'f-ads','f-item-cost','f-material','f-supplies','f-labor','f-packaging','f-shipping-cost','f-tax']
+    .forEach(id=>{ const el=document.getElementById(id); if(el) el.value=''; });
+  document.getElementById('f-listing-fee').value='0.20';
+  document.getElementById('f-txn-pct').value='6.5';
+  document.getElementById('f-payment-pct').value='3';
+  document.getElementById('f-payment-flat').value='0.25';
+  document.getElementById('f-offsite-select').value='0';
+  document.getElementById('f-offsite-pct').value='0';
+  document.getElementById('f-offsite-pct').style.display='none';
+  liveCalc();
+}
+
+// ── RENDER SAVED LIST ─────────────────────────────────────────
+function renderSavedList(){
+  const recs=window._invRecords||[];
+  document.getElementById('savedCount').textContent=recs.length+(recs.length===1?' product':' products');
+  const list=document.getElementById('savedList');
+  if(!recs.length){ list.innerHTML='<div class="saved-empty">No products yet. Add your first product to get started.</div>'; renderTable(); renderSummaryCards(); return; }
+  list.innerHTML=recs.map(r=>{
+    const profit=calcProfit(r), margin=calcMargin(r);
+    const saved=r._savedAt?new Date(r._savedAt).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'';
+    const pc=profit>=0?'var(--green)':'var(--red)';
+    return `<div class="saved-item" onclick="loadRecord('${r._fbKey}')">
+      <div class="saved-item-info">
+        <div class="saved-item-name">${esc(r.name||'Unnamed')}${r.sku?' &nbsp;<span style="font-weight:400;color:var(--muted);">'+esc(r.sku)+'</span>':''}</div>
+        <div class="saved-item-meta">Saved ${saved}${r.category?' · '+esc(r.category):''}</div>
+      </div>
+      <div class="saved-item-profit" style="color:${pc}">${fmt(profit)} <span style="font-weight:400;font-size:0.7rem;">(${margin.toFixed(1)}%)</span></div>
+      <button class="saved-item-del" title="Delete" onclick="delRecord('${r._fbKey}',event)">✕</button>
+    </div>`;
+  }).join('');
+  renderTable(); renderSummaryCards();
+}
+
+// ── RENDER TABLE ──────────────────────────────────────────────
+function renderTable(f){
+  const recs=window._invRecords||[];
+  const fl=(f||'').toLowerCase();
+  const rows=fl?recs.filter(r=>(r.name||'').toLowerCase().includes(fl)||(r.sku||'').toLowerCase().includes(fl)||(r.desc||'').toLowerCase().includes(fl)):recs;
+  document.getElementById('recCount').textContent=rows.length+' product'+(rows.length!==1?'s':'');
+  const tb=document.getElementById('invTbody');
+  if(!rows.length){ tb.innerHTML=`<tr><td colspan="8" class="empty-td">${fl?'No products match your search.':'No products yet — add your first one!'}</td></tr>`; return; }
+  tb.innerHTML=rows.map(r=>{
+    const rev=calcRev(r),fees=calcFees(r).total,costs=calcCosts(r),profit=rev-fees-costs,margin=rev?profit/rev*100:0;
+    const mc=margin>=30?'badge-good':margin>=0?'badge-ok':'badge-bad';
+    const pc=profit>=0?'t-pos':'t-neg';
+    return `<tr>
+      <td><div class="td-name">${esc(r.name||'—')}</div><div class="td-sub">${r.sku?esc(r.sku):''}${r.sku&&r.category?' · ':''}${r.category?esc(r.category):''}</div></td>
+      <td>$${(r.price||0).toFixed(2)}</td>
+      <td>$${rev.toFixed(2)}</td>
+      <td>$${fees.toFixed(2)}</td>
+      <td>$${costs.toFixed(2)}</td>
+      <td class="${pc}">${fmt(profit)}</td>
+      <td><span class="badge ${mc}">${margin.toFixed(1)}%</span></td>
+      <td style="white-space:nowrap;">
+        <button class="btn-t btn-t-view" onclick="showDetail('${r._fbKey}')">Details</button>
+        <button class="btn-t btn-t-del" onclick="delRecord('${r._fbKey}',event)">Delete</button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function filterTable(){ renderTable(document.getElementById('searchInput').value); }
+
+// ── SUMMARY CARDS ─────────────────────────────────────────────
+function renderSummaryCards(){
+  const recs=window._invRecords||[];
+  const totRev=recs.reduce((s,r)=>s+calcRev(r),0);
+  const totFees=recs.reduce((s,r)=>s+calcFees(r).total,0);
+  const totCosts=recs.reduce((s,r)=>s+calcCosts(r),0);
+  const totProfit=totRev-totFees-totCosts;
+  const avgMargin=recs.length?recs.reduce((s,r)=>s+calcMargin(r),0)/recs.length:0;
+  document.getElementById('sum-products').textContent=recs.length;
+  document.getElementById('sum-revenue').textContent='$'+totRev.toFixed(2);
+  document.getElementById('sum-costs').textContent='$'+(totFees+totCosts).toFixed(2);
+  document.getElementById('sum-profit').textContent=fmt(totProfit);
+  document.getElementById('sum-margin').textContent=avgMargin.toFixed(1)+'%';
+}
+
+// ── DETAIL MODAL ──────────────────────────────────────────────
+function showDetail(key){
+  const r=(window._invRecords||[]).find(x=>x._fbKey===key); if(!r) return;
+  const rev=calcRev(r),fees=calcFees(r),costs=calcCosts(r),profit=rev-fees.total-costs,margin=rev?profit/rev*100:0;
+  const mr=(lbl,val)=>`<div class="modal-row"><span class="modal-row-lbl">${lbl}</span><span class="modal-row-val">${val}</span></div>`;
+  document.getElementById('modalTitle').textContent=r.name||'Product Detail';
+  document.getElementById('modalBody').innerHTML=`
+    ${r.sku||r.category?`<div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.75rem;">${r.sku?'SKU: '+esc(r.sku):''}${r.sku&&r.category?' · ':''}${r.category?esc(r.category):''}</div>`:''}
+    ${r.desc?`<div style="font-size:0.88rem;margin-bottom:1rem;line-height:1.55;">${esc(r.desc)}</div>`:''}
+    <div class="modal-sec-title">💰 Revenue</div>
+    ${mr('Item Price','$'+(r.price||0).toFixed(2))}
+    ${mr('Shipping Price','$'+(r.shippingRev||0).toFixed(2))}
+    ${mr('Discount','-$'+(r.discount||0).toFixed(2))}
+    <div class="modal-total"><span class="modal-total-lbl">Total Revenue</span><span class="modal-total-val" style="color:var(--green);">$${rev.toFixed(2)}</span></div>
+    <div class="modal-sec-title">🏷️ Etsy Fees</div>
+    ${mr('Listing Fee','$'+fees.listing.toFixed(2))}
+    ${mr('Transaction Fee ('+(r.txnPct||0)+'%)','$'+fees.txn.toFixed(2))}
+    ${mr('Payment Processing ('+(r.paymentPct||0)+'% + $'+(r.paymentFlat||0).toFixed(2)+')','$'+fees.pay.toFixed(2))}
+    ${mr('Etsy Ads Spend','$'+fees.ads.toFixed(2))}
+    ${mr('Offsite Ads Fee ('+(r.offsitePct||0)+'%)','$'+fees.off.toFixed(2))}
+    <div class="modal-total"><span class="modal-total-lbl">Total Etsy Fees</span><span class="modal-total-val" style="color:var(--coral);">$${fees.total.toFixed(2)}</span></div>
+    <div class="modal-sec-title">📦 Product Costs</div>
+    ${mr('Item Cost','$'+(r.itemCost||0).toFixed(2))}
+    ${mr('Material Cost','$'+(r.material||0).toFixed(2))}
+    ${mr('Other Supplies','$'+(r.supplies||0).toFixed(2))}
+    ${mr('Labor','$'+(r.labor||0).toFixed(2))}
+    ${mr('Packaging','$'+(r.packaging||0).toFixed(2))}
+    ${mr('Shipping Cost','$'+(r.shippingCost||0).toFixed(2))}
+    ${mr('Tax','$'+(r.tax||0).toFixed(2))}
+    <div class="modal-total"><span class="modal-total-lbl">Total Costs</span><span class="modal-total-val" style="color:var(--orange);">$${costs.toFixed(2)}</span></div>
+    <div class="modal-profit-grid">
+      <div class="modal-profit-card">
+        <div class="pc-label">Net Profit</div>
+        <div style="font-family:'Playfair Display',serif;font-size:1.6rem;font-weight:700;color:${profit>=0?'var(--green)':'var(--red)'};">${fmt(profit)}</div>
+        <div class="pc-formula">Revenue − Fees − Costs</div>
+      </div>
+      <div class="modal-profit-card">
+        <div class="pc-label">Profit Margin</div>
+        <div style="font-family:'Playfair Display',serif;font-size:1.6rem;font-weight:700;color:${margin>=30?'var(--green)':margin>=0?'var(--orange)':'var(--red)'};">${margin.toFixed(1)}%</div>
+        <div class="pc-formula">Profit ÷ Revenue × 100</div>
+      </div>
+    </div>`;
+  document.getElementById('detailModal').classList.remove('hidden');
+}
+
+function closeModal(){ document.getElementById('detailModal').classList.add('hidden'); }
+document.getElementById('detailModal').addEventListener('click',e=>{ if(e.target===e.currentTarget) closeModal(); });
+
+// ── LOAD RECORD INTO FORM ─────────────────────────────────────
+function loadRecord(key){
+  const r=(window._invRecords||[]).find(x=>x._fbKey===key); if(!r) return;
+  if(document.getElementById('f-name').value.trim() && !confirm('Load this record? Unsaved changes will be lost.')) return;
+  const map={'f-name':r.name,'f-sku':r.sku,'f-category':r.category,'f-desc':r.desc,
+    'f-price':r.price,'f-shipping-rev':r.shippingRev,'f-discount':r.discount,
+    'f-listing-fee':r.listingFee,'f-txn-pct':r.txnPct,'f-payment-pct':r.paymentPct,
+    'f-payment-flat':r.paymentFlat,'f-ads':r.adsFee,'f-offsite-pct':r.offsitePct,
+    'f-item-cost':r.itemCost,'f-material':r.material,'f-supplies':r.supplies,
+    'f-labor':r.labor,'f-packaging':r.packaging,'f-shipping-cost':r.shippingCost,'f-tax':r.tax};
+  Object.entries(map).forEach(([id,val])=>{ const el=document.getElementById(id); if(el&&val!==undefined) el.value=val; });
+  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+  document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));
+  document.querySelector('[data-tab="add"]').classList.add('active');
+  document.getElementById('tab-add').classList.add('active');
+  liveCalc(); window.scrollTo({top:0,behavior:'smooth'});
+}
+
+function delRecord(key,e){
+  e.stopPropagation();
+  if(!confirm('Delete this product? This cannot be undone.')) return;
+  window._fbRemove(`inventory/${key}`);
+}
+
+function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+liveCalc();
+</script>
+</body>
+</html>
